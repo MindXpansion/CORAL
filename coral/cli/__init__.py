@@ -60,6 +60,8 @@ _VISIBLE_COMMANDS = [
     "checkout",
     "export",
     "heartbeat",
+    "setup",
+    "agents",
 ]
 
 
@@ -113,6 +115,10 @@ Inspecting Results:
   notes           Browse shared notes
   skills          Browse shared skills
   runs            List runs (active only; --all for stopped)
+
+User Setup:
+  setup           Detect installed agent runtimes + configure bindings
+  agents          List, inspect, and validate agent bindings
 
 Dashboard:
   ui              Launch the web dashboard
@@ -536,6 +542,139 @@ Run 'coral <command> --help' for details on any command."""
     hb_reset = hb_sub.add_parser("reset", help="Reset to task YAML defaults")
     _add_run_args(hb_reset)
 
+    # --- User Setup: agent bindings ---
+
+    p_setup = sub.add_parser(
+        "setup",
+        help="Detect agent runtimes / configure user-level agent bindings",
+        description=(
+            "With no subcommand, scan PATH for installed agent runtime CLIs and "
+            "offer to create a binding for each one (interactive). With "
+            "`coral setup agent`, create or update a named binding non-interactively. "
+            "A binding bundles a runtime, CLI command, model, runtime options, and "
+            "optional role seed so tasks can reference it by name."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  coral setup                               Detect runtimes + wizard\n"
+            "  coral setup --non-interactive             Just print the detection report\n"
+            "  coral setup agent                         Interactive single-binding setup\n"
+            "  coral setup agent --name claude-opus --runtime claude_code --model opus\n"
+            "  coral setup agent --name codex-high --runtime codex --option model_reasoning_effort=high"
+        ),
+        formatter_class=_CommandHelpFormatter,
+    )
+    p_setup.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Never prompt; just print the detection report and exit",
+    )
+    p_setup.add_argument("--config", help="Path to the user bindings file (advanced)")
+    setup_sub = p_setup.add_subparsers(dest="setup_command")
+    sp_agent = setup_sub.add_parser(
+        "agent",
+        help="Create or update a named agent binding",
+        formatter_class=_CommandHelpFormatter,
+    )
+    sp_agent.add_argument("--name", help="Binding name (e.g. claude-opus)")
+    sp_agent.add_argument("--runtime", help="Runtime (claude_code, codex, opencode, ...)")
+    sp_agent.add_argument(
+        "--command",
+        dest="command_path",
+        help="CLI binary (defaults to the runtime's command)",
+    )
+    sp_agent.add_argument("--model", help="Default model for this binding")
+    sp_agent.add_argument("--role-file", dest="role_file", help="Path to a role seed .md file")
+    sp_agent.add_argument(
+        "--option",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Runtime option (repeatable)",
+    )
+    sp_agent.add_argument("--default", action="store_true", help="Make this the default binding")
+    sp_agent.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Never prompt; require values via flags",
+    )
+    sp_agent.add_argument("--config", help="Path to the user bindings file (advanced)")
+
+    p_agents = sub.add_parser(
+        "agents",
+        help="List, inspect, and validate agent bindings",
+        description="Manage user-level agent bindings stored in ~/.config/coral/agents.yaml.",
+        epilog=(
+            "Examples:\n"
+            "  coral agents list                 List all bindings\n"
+            "  coral agents show claude-opus     Inspect one binding\n"
+            "  coral agents doctor               Validate all bindings\n"
+            "  coral agents remove claude-opus   Delete a binding"
+        ),
+        formatter_class=_CommandHelpFormatter,
+    )
+    ag_sub = p_agents.add_subparsers(dest="agents_command")
+    ag_list = ag_sub.add_parser("list", help="List all bindings")
+    ag_list.add_argument("--config", help="Path to the user bindings file (advanced)")
+    ag_show = ag_sub.add_parser("show", help="Show one binding")
+    ag_show.add_argument("name", help="Binding name")
+    ag_show.add_argument("--config", help="Path to the user bindings file (advanced)")
+    ag_remove = ag_sub.add_parser(
+        "remove",
+        help="Delete one or more bindings (interactive when no names given)",
+        description=(
+            "Delete bindings. Pass one or more names to remove them directly, or "
+            "pass no name to launch an interactive numbered-selection wizard."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  coral agents remove                        Interactive selection\n"
+            "  coral agents remove claude-opus            Remove one binding\n"
+            "  coral agents remove claude-opus codex-high Remove several at once"
+        ),
+        formatter_class=_CommandHelpFormatter,
+    )
+    ag_remove.add_argument(
+        "names",
+        nargs="*",
+        help="Binding name(s); omit for interactive selection",
+    )
+    ag_remove.add_argument("--config", help="Path to the user bindings file (advanced)")
+    ag_doctor = ag_sub.add_parser(
+        "doctor",
+        help="Validate bindings (includes a live hello-ping by default)",
+        description=(
+            "Validate bindings. By default this includes a live hello-ping that "
+            "spawns the runtime CLI, sends a tiny prompt, and waits for output — "
+            "useful for catching auth failures and stale installs, but every ping "
+            "is one LLM round-trip per binding. Pass --no-live for the cheap, "
+            "metadata-only checks (resolves to AgentSpec / CLI present / "
+            "--version works / role_file exists)."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  coral agents doctor                 Validate all bindings (with live ping)\n"
+            "  coral agents doctor claude-opus     Validate one binding\n"
+            "  coral agents doctor --no-live       Skip the LLM round-trip (CI / quick check)\n"
+            "  coral agents doctor --timeout 60    Allow up to 60s per ping"
+        ),
+        formatter_class=_CommandHelpFormatter,
+    )
+    ag_doctor.add_argument("name", nargs="?", help="Binding to check (default: all)")
+    ag_doctor.add_argument("--config", help="Path to the user bindings file (advanced)")
+    ag_doctor.add_argument(
+        "--no-live",
+        dest="no_live",
+        action="store_true",
+        help="Skip the live hello-ping (only run cheap metadata checks)",
+    )
+    ag_doctor.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help="Per-binding ping timeout in seconds (default: 30)",
+    )
+
     # --- Parse and dispatch ---
 
     args = parser.parse_args()
@@ -545,6 +684,7 @@ Run 'coral <command> --help' for details on any command."""
         sys.exit(0)
 
     # Lazy imports for fast startup
+    from coral.cli.agents import cmd_agents, cmd_setup
     from coral.cli.author import cmd_init, cmd_validate
     from coral.cli.eval import (
         cmd_checkout,
@@ -578,6 +718,8 @@ Run 'coral <command> --help' for details on any command."""
         "runs": cmd_runs,
         "init": cmd_init,
         "validate": cmd_validate,
+        "setup": cmd_setup,
+        "agents": cmd_agents,
         "ui": cmd_ui,
         # Hidden aliases for backward compatibility
         "attempts": _cmd_attempts_compat,
