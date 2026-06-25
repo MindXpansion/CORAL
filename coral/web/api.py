@@ -27,7 +27,7 @@ def _run_is_alive(coral_dir: Path) -> bool:
             return True
         except (ProcessLookupError, PermissionError, ValueError):
             pass
-    return is_docker_run_alive(coral_dir)
+    return is_docker_run_alive(coral_dir, quiet=True)
 
 
 async def get_config(request: Request) -> JSONResponse:
@@ -160,13 +160,17 @@ async def get_steering(request: Request) -> JSONResponse:
 
 
 async def post_steer(request: Request) -> JSONResponse:
-    """POST /api/steer — queue or apply dashboard steering actions."""
+    """POST /api/steer — queue or apply dashboard steering actions.
+
+    `mark_best` is just a flag on an attempt and applies immediately.
+    `continue_from` is queued under `.coral/public/steering/` and consumed by
+    `coral resume`. Both are safe to call while the run is alive — the queued
+    `continue_from` action simply waits until the user stops and resumes.
+    """
     from coral.hub.attempts import set_user_best
     from coral.hub.steering import ContinueFromAction, enqueue
 
     coral_dir = _coral_dir(request)
-    if _run_is_alive(coral_dir):
-        return JSONResponse({"error": "stop the run to steer"}, status_code=409)
 
     body = await request.json()
     kind = body.get("kind")
@@ -210,6 +214,13 @@ async def get_notes(request: Request) -> JSONResponse:
     for i, entry in enumerate(entries):
         entry["index"] = i
     return JSONResponse(entries)
+
+
+async def get_notes_graph(request: Request) -> JSONResponse:
+    """GET /api/notes/graph — notes as a connection graph (nodes + edges)."""
+    from coral.hub.notes import notes_graph
+
+    return JSONResponse(notes_graph(str(_coral_dir(request))))
 
 
 async def get_skills(request: Request) -> JSONResponse:
@@ -474,7 +485,7 @@ async def get_status(request: Request) -> JSONResponse:
             manager_alive = True
         except (ProcessLookupError, PermissionError, ValueError):
             pass
-    is_docker = not manager_alive and is_docker_run_alive(coral_dir)
+    is_docker = not manager_alive and is_docker_run_alive(coral_dir, quiet=True)
     if is_docker:
         manager_alive = True
 
